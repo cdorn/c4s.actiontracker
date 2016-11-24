@@ -1,0 +1,18 @@
+{
+  "name": "trackingendpoint",
+  "version": "1.0.0",
+  "description": "Receiving Piwik Observations",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "C.Mayr-Dorn",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.15.2",
+    "errorhandler": "^1.4.3",
+    "express": "^4.14.0",
+    "lodash": "^4.16.6",
+    "nano": "^6.2.0"
+  }
+}
