@@ -9,10 +9,13 @@
   "author": "C.Mayr-Dorn",
   "license": "ISC",
   "dependencies": {
+    "async": "^2.1.4",
     "body-parser": "^1.15.2",
     "errorhandler": "^1.4.3",
     "express": "^4.14.0",
     "lodash": "^4.16.6",
-    "nano": "^6.2.0"
+    "nano": "^6.2.0",
+    "neo4j": "^2.0.0-RC2",
+    "neo4j-driver": "^1.0.4"
   }
 }

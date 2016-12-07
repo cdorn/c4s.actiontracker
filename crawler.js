@@ -27,7 +27,7 @@ var ph2e = undefined;
 var dbconfig = {
     dbName: config.crawler_dbName,
     cleanUp: 'false',
-    dbURL: config. couchDB_url
+    dbURL: config.couchDB_url
 };
 
 initPh2E(dbconfig, function(err, inst) {
