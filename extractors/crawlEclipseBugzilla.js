@@ -1,60 +1,28 @@
 // JavaScript File
 var bz = require("./bz-json-ext.js");
+var JSZip = require("jszip");
+var X2J = require('xml2js');
+//var Readable = require('stream').Readable;
 var _ = require('lodash');
+var async = require('async');
 
 module.exports = initEBZ;
 
 function initEBZ(opts, cb) {
-    if (!opts)
-        throw new Error("Fatal error from EclipseBugzillaCrawler: no options provided");
+    if (!opts || !opts.bugDB || !opts.attachmentsDB)
+        throw new Error("Fatal error from EclipseBugzillaCrawler: no options AND/OR no CouchDBs provided");
    return new EBZ(opts, cb);     
 }
 
 function EBZ(opts, cb) {
-    this.dbName = opts.dbName || 'ebz_db';
-    this.cleanUp = opts.cleanUp || 'false';
+    this.db = opts.bugDB;
+    this.attachmentsDB = opts.attachmentsDB;
+    
     this.createDBIDfromBugID = function(bugId) { return "EBZId-"+bugId; }
     var bzUrl = opts.bugzillaUrl || "https://bugzilla.mozilla.org/jsonrpc.cgi";
     var bzUser = opts.bugzillaUser;
     var bzPassword = opts.bugzillaPassword;
-    var dbURL = opts.dbURL || 'http://localhost:5984';
-    
-    var nano = require('nano')(dbURL);
-    
-    
-    
     var self = this;
-    // setup couchDB
-    if (this.cleanUp == 'true')
-    {
-        // for development we clean up the database we created previously
-        nano.db.destroy(self.dbName, function(err, body) {
-            if (err)
-            {
-                console.log("Database (" + self.dbName + ") doesn't exit - nothing to destroy");
-            }
-            // create a new database
-            nano.db.create(self.dbName, function(err, body) {
-                if (!err) {
-                    console.log("Database (" + self.dbName + ") created!");
-                    self.db = nano.use(self.dbName);
-                    console.log("New Database (" + self.dbName + ") ready");
-                }
-                else {
-                    return cb(err, null);
-                }
-            });
-        });
-    } else {
-       // check if existing
-       nano.db.create(self.dbName, function(err, body) {
-            if (err)
-                console.log("Existing Database (" + self.dbName + ") ready");
-            else
-                console.log("New database (" + self.dbName + ") ready");
-            self.db = nano.use(self.dbName);
-       });
-    }
     
     this.bzClient = bz.createClient({
         url: bzUrl,
@@ -62,7 +30,47 @@ function EBZ(opts, cb) {
         password: bzPassword
     });
     
-    return cb(null, self);
+    this._collectBlobs = function(db, offset, results, cb) {
+    var self = this;
+    results = results || [];
+    //offset = offset || 0;
+    console.log("Calling with offset %d", offset);
+    db.list({
+            include_docs: true,
+            limit: 5,
+            skip: offset
+        },
+        function(err, data) {
+            var total, offset, rows;
+            if (err) {
+                rows = [];
+                return cb(err, results);
+            }
+            total = data.total_rows;
+            offset = data.offset;
+            rows = data.rows;
+            if (offset === total) {
+                return cb(null, results);
+            }
+            
+            //need to unwarp row to access doc: row.doc
+            async.concat(_.flatMap(rows, _unwrapRow), 
+                        function (item, cb) {
+                            self.storeXMLatt2JSONdoc(item, cb);
+                        }, 
+                        function(err, result) {
+                if (!err)
+                {
+                    results.concat(result);
+                    self._collectBlobs(db, offset + 5, results, cb);    
+                }
+                else
+                    return cb(err, results);
+                });
+        });
+        }
+    
+    cb(null, self);
 }
 
 function result2singleBug(result) {
@@ -137,6 +145,133 @@ EBZ.prototype.extractBug = function extractBug(bugId, cb) {
         else cb(null, "Bug: "+bugId+" already in DB, WILL NOT crawl and store it");
     });
 };
+
+EBZ.prototype.convertBlobs2Attachments = function convertBlobs2Attachments(bugId, cb) {
+    // iterates through all bug documents and extracts attachment blobs, 
+    //                                  removes json entry and 
+    //                                  stors blob as couchdb attachment for that document
+    
+    // for testing now just use a single doc
+    var self = this;
+    this.db.get(bugId, function(err, body) {
+        if (err)
+            return cb(err);
+        else {
+            self.storeXMLatt2JSONdoc(body, cb);
+            //return cb(null, "BlobExtraction completed");
+        }
+    });
+    
+}
+
+EBZ.prototype.convertAllBlobs2Attachments = function convertAllBlobs2Attachments(cb) {
+    this._collectBlobs(this.db, 0, null, cb);
+}
+
+
+
+function _unwrapRow(row) {
+    return row.doc;
+}
+
+function _unwrapEvent(event) {
+    return event['$'];
+}
+
+function _unzipAndParse(att, cb) {
+    JSZip.loadAsync(att.data, {
+        base64: true
+    }).then(function(zip) {
+        zip.forEach(function(relativePath, file) {
+            if (!relativePath.endsWith('.xml'))
+            {
+                console.log("ZIP doesn't contain XML, continuing after: "+relativePath);
+            } else {
+                file.async("nodebuffer").then(function success(content) {
+                    var parser = new X2J.Parser();
+                    parser.parseString(content, function(err, result) {
+                        if (err) 
+                            return cb(err, null);
+                        else {
+                            att.data = null;
+                            att.jsondata = _.flatMap(result.InteractionHistory.InteractionEvent, _unwrapEvent);
+                            att['_id'] = 'ActivityAttachment-'+att.id+'_Bug-'+att.bug_id;
+                            return cb(null, att);
+                        }
+                    })
+                    parser = null;
+                },
+                function error(err) {
+                    return cb(err, null);
+                });
+            }
+        });
+    });
+    cb(null, att);
+}
+
+EBZ.prototype.storeBulkAttachments = function storeBulkAttachments(attachments, cb) {
+    var bulk = {
+        docs : []
+    };
+    var self = this;
+    _.values(attachments).forEach( function(element) {
+       bulk.docs.push(element);
+    });
+    if (bulk.docs.length > 0)
+    {
+        self.attachmentsDB.bulk(bulk, function(err, ok) {
+            if (err)
+                return cb(err);
+            else
+                return cb(null, bulk.docs.length);
+        });
+    }
+    else
+        cb(null, 0);
+};
+
+EBZ.prototype.storeXMLatt2JSONdoc = function storeXMLatt2JSONdoc(doc, cb) {
+   // var attachmentsToStore = [];
+    var self = this;
+    if (doc && doc.attachments) {
+        // first filter out incomplete and keep appl/octet i.e. mylyn docs
+        var xmlAtts = _.chain(doc.attachments)
+            .filter(function(att) {
+                return (att.id && att.file_name && att.data && att.content_type);
+            })
+            .filter( function(att) {
+                return (att.content_type == "application/octet-stream"); 
+            })
+            .value();
+        
+        async.map(xmlAtts, _unzipAndParse, function(err, results) {
+            if (err)
+                return cb(err, null);
+            else {
+                console.log('%s Processed '+results.length+' out of '+doc.attachments.length+' attachements', doc._id);
+                // bulk store
+                self.storeBulkAttachments(_.filter(results, function(attachment) {
+                    if (!attachment) return false; else return true;
+                }), cb);
+                //return cb(null, results);
+            }
+        });
+    }
+    else {
+        console.log('No attachments, ignoring bug: '+doc.id);
+        return cb(null, []);
+    }
+    //                     case "text/plain" :
+    //                         const buffer = Buffer.from(att.data, 'base64');
+    //                         console.log(buffer.toString('utf8',0,10));
+    //                         // var streamIn = new Readable;
+    //                         // streamIn.setEncoding('utf8');
+    //                         // streamIn.push(att.data);
+    //                         // streamIn.push(null);
+}
+
+
 
 EBZ.prototype.extractBugIds = function extractBugsFromFile(filename, cb) {
  

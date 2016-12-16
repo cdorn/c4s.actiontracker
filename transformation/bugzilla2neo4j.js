@@ -115,6 +115,8 @@ function _collectTasks(db, offset, graph, cb) {
         });
 }
 
+
+
 // COUCH DB 1.6.1 does not support FIND!!!
 /*TasksExtractor.prototype.list = function list(selector, fields, sort, limit, skip, cb) {
     var self = this;
