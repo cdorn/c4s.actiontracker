@@ -7,6 +7,9 @@ var http = require('http');
 var _ = require('lodash');
 var c = require('./config.js');
 var B2N = require('./transformation/bugzilla2neo4j.js');
+var M2N = require('./transformation/mylyn2neo4j.js');
+var DBU = require('./util/dbutil.js');
+var async = require('async');
 
 var app = express();
 var port = 3001;
@@ -20,20 +23,62 @@ app.use(errorHandler({
     showStack: true
 }));
 
+var bugdbConfig = {
+    dbName: c.config.bugzilla_dbName,
+    cleanUp: 'false',
+    dbURL: c.config.couchDB_url,
+};
+
+var attachmentdbConfig = {
+    dbName: c.config.bugAttachments_dbName,
+    cleanUp: 'false',
+    dbURL: c.config.couchDB_url,
+};
+
+var graphdbConfig = {
+   neo4jUser: c.config.neo4jUser, 
+   neo4jPW: c.config.neo4jPW,
+   neo4jURL: c.config.neo4jURL,
+   cleanUp : 'false'
+}
+
+var m2n = undefined;
+async.parallel([
+        async.apply(DBU.initNeo4jDB, graphdbConfig),
+        async.apply(DBU.initCouchDB, attachmentdbConfig)
+    ],
+    function(err, results) {
+        if (err)
+            throw new Error("Fatal error initializing DBs for Eclipse Bugzilla Extractor \r\n" + err);
+        else {
+            m2n = new M2N({ neo4jDB : results[0],
+                            attachmentsDB : results[1] });
+        }
+    });
+
+
+
 
 c.config['cleanUp'] = 'false'; // for neo4j only!!
 
-var tex = new B2N.TasksExtractor(c.config);
+// var tex = new B2N.TasksExtractor(c.config);
 
-var n4j = new B2N.N4J(c.config);
+// var n4j = new B2N.N4J(c.config);
 
-var trn = new B2N.TaskTransformer();
+// var trn = new B2N.TaskTransformer();
 
 app.get("/bugs2neo4j",  function(req, res) {
     
     //insertTestBZData();
-    insertAllBZData();
-    return res.status(200).end();
+    //insertAllBZData();
+    m2n.user2bugViaSessions(function (err, result) {
+        if (err) {
+            return res.status(500).json({
+                        'errors': err
+                    });
+        }
+        else  return res.status(200).end();
+    });
 });
 
 function insertAllBZData() {

@@ -1,5 +1,6 @@
 
 var _ = require('lodash');
+var DBU = require('../util/dbutil.js');
 
 module.exports = initAtt2Mylyn;
 
@@ -205,3 +206,20 @@ function getResourceStats(events) {
         return result;
     }, stats);
 }
+
+// function
+
+//         statistics for:
+// sessions per user
+// # of bugs active per user
+// views vs edited files per session => edited/views
+// avg viewed number of files per session
+// avg edited number of files per session
+
+// for pairs of blocking blocked:
+// # of tuples where A and B have mylyn context = full tuple
+// for each full tuple:
+// overlap of active/session developers
+// # of A.edited and B.viewed
+// overlap of A.edited and B.edited
+

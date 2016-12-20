@@ -8,7 +8,7 @@ var async = require('async');
 var c = require('./config.js');
 var initEBZ = require('./extractors/crawlEclipseBugzilla.js');
 var initAtt2Mylyn = require('./transformation/mylyn-transformation.js');
-var initCouchDB = require('./util/dbutil.js');
+var DBU = require('./util/dbutil.js');
 
 var app = express();
 var port = 3001;
@@ -34,11 +34,13 @@ var attachmentdbConfig = {
     dbURL: c.config.couchDB_url,
 };
 
+//var dbUtil = new DBU.DBUtil();
+
 var ebz = undefined;
-var myl = undefined
+var myl = undefined;
 async.parallel([
-        async.apply(initCouchDB, bugdbConfig),
-        async.apply(initCouchDB, attachmentdbConfig)
+        async.apply(DBU.initCouchDB, bugdbConfig),
+        async.apply(DBU.initCouchDB, attachmentdbConfig)
     ],
     // now do something with the results
     function(err, results) {
@@ -112,7 +114,10 @@ app.get("/blockingBugs", function(req, res) {
 
 app.get("/extractAttachments", function(req, res) {
     //ebz.convertBlobs2Attachments(req.query.bugId, function (err, result) {
-    ebz.convertAllBlobs2Attachments(function (err, result) {
+    //ebz.convertAllBlobs2Attachments(function (err, result) {
+    //ebz.removeBugsWithoutMylynContext(function (err, result){
+    // ebz.removeIllnamedAttachments(function (err, result) {
+     ebz.checkExtractedAttachments( function (err, result) {
         if (err) {
             return res.status(500).json({
                         'errors': err

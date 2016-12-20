@@ -5,6 +5,9 @@ var X2J = require('xml2js');
 //var Readable = require('stream').Readable;
 var _ = require('lodash');
 var async = require('async');
+var DBU = require('../util/dbutil.js');
+
+const attachmentPrefix = 'ActivityAttachment-';
 
 module.exports = initEBZ;
 
@@ -24,18 +27,18 @@ function EBZ(opts, cb) {
     var bzPassword = opts.bugzillaPassword;
     var self = this;
     
-    this.bzClient = bz.createClient({
-        url: bzUrl,
-        username: bzUser,
-        password: bzPassword
-    });
+    // this.bzClient = bz.createClient({
+    //     url: bzUrl,
+    //     username: bzUser,
+    //     password: bzPassword
+    // });
     
-    this._collectBlobs = function(db, offset, results, cb) {
+    this._collectBlobs = function(offset, results, cb) {
     var self = this;
-    results = results || [];
+    results = results || 0.00;
     //offset = offset || 0;
     console.log("Calling with offset %d", offset);
-    db.list({
+    self.db.list({
             include_docs: true,
             limit: 5,
             skip: offset
@@ -44,33 +47,39 @@ function EBZ(opts, cb) {
             var total, offset, rows;
             if (err) {
                 rows = [];
+                console.error('Error iterating through bug documents '+err);
                 return cb(err, results);
             }
             total = data.total_rows;
             offset = data.offset;
             rows = data.rows;
             if (offset === total) {
+                console.log('Completed iterating through all %d documents and %d db inserts', total, results);
                 return cb(null, results);
             }
             
             //need to unwarp row to access doc: row.doc
-            async.concat(_.flatMap(rows, _unwrapRow), 
-                        function (item, cb) {
-                            self.storeXMLatt2JSONdoc(item, cb);
-                        }, 
+            async.concatSeries(_.flatMap(rows, _unwrapRow), 
+                        //function (item, cb) {
+                            //self.storeXMLatt2JSONdoc.(item, cb);
+                            self.storeXMLatt2JSONdoc.bind(self),
+                        //}, 
                         function(err, result) {
                 if (!err)
                 {
-                    results.concat(result);
-                    self._collectBlobs(db, offset + 5, results, cb);    
+                    //results.concat(result);
+                    results = _.reduce(result, function(sum, n) { return sum+n; }, results);
+                    
+                    self._collectBlobs(offset + 5, results, cb);    
                 }
-                else
+                else {
                     return cb(err, results);
+                }
                 });
         });
-        }
+    }
     
-    cb(null, self);
+    cb(null, this);
 }
 
 function result2singleBug(result) {
@@ -146,7 +155,7 @@ EBZ.prototype.extractBug = function extractBug(bugId, cb) {
     });
 };
 
-EBZ.prototype.convertBlobs2Attachments = function convertBlobs2Attachments(bugId, cb) {
+EBZ.prototype.convertBlob2Attachments = function convertBlob2Attachments(bugId, cb) {
     // iterates through all bug documents and extracts attachment blobs, 
     //                                  removes json entry and 
     //                                  stors blob as couchdb attachment for that document
@@ -165,10 +174,12 @@ EBZ.prototype.convertBlobs2Attachments = function convertBlobs2Attachments(bugId
 }
 
 EBZ.prototype.convertAllBlobs2Attachments = function convertAllBlobs2Attachments(cb) {
-    this._collectBlobs(this.db, 0, null, cb);
+    this._collectBlobs(435, null, cb);
 }
 
-
+function _createAttachmentDocName(att) {
+    return attachmentPrefix+att.id+'_Bug-'+att.bug_id;
+}
 
 function _unwrapRow(row) {
     return row.doc;
@@ -178,36 +189,113 @@ function _unwrapEvent(event) {
     return event['$'];
 }
 
-function _unzipAndParse(att, cb) {
+function _unzip(att, cb) {
+    // if(att.summary == 'mylyn/context/zip' ||
+    //     att.summary == 'activity_data')
+    // {
     JSZip.loadAsync(att.data, {
         base64: true
     }).then(function(zip) {
+        var files = [];
         zip.forEach(function(relativePath, file) {
-            if (!relativePath.endsWith('.xml'))
+            if (relativePath.endsWith('.xml'))
             {
-                console.log("ZIP doesn't contain XML, continuing after: "+relativePath);
-            } else {
-                file.async("nodebuffer").then(function success(content) {
+                files.push(file);
+            } 
+        });
+        if (files.length > 0)
+        {
+            if (files.length < 1) 
+                console.log('Ignoring %d further xml files in attachment %s of bug %s', files.length-1, att.id, att.bug_id);
+            _parse(files[0], att, cb);
+        }
+        else {
+          //  console.log('No xml files in attachment %s of bug %s', att.id, att.bug_id);
+            return cb('No xml files in attachment');
+        }
+    }).catch(function (error) {
+        //console.log('Error loading attachment data: '+error)
+        return cb(error);
+    });
+    // } else {
+    //     console.log('Wont process %s of attachment %s of bug %s', att.file_name, att.id, att.bug_id);
+    //     return cb('No suitable zip file in attachment');
+    // }
+    
+}
+
+function _parse(file, att, cb) {
+    file.async("nodebuffer").then(function success(content) {
                     var parser = new X2J.Parser();
                     parser.parseString(content, function(err, result) {
-                        if (err) 
+                        if (err) {
+                            console.err("Error parsing content: "+err);
                             return cb(err, null);
-                        else {
-                            att.data = null;
-                            att.jsondata = _.flatMap(result.InteractionHistory.InteractionEvent, _unwrapEvent);
-                            att['_id'] = 'ActivityAttachment-'+att.id+'_Bug-'+att.bug_id;
-                            return cb(null, att);
+                        } else {
+                            file = null;
+                            parser = null;
+                            if (result && result.InteractionHistory && result.InteractionHistory.InteractionEvent)
+                            {
+                                att.data = null;
+                                att.jsondata = _.flatMap(result.InteractionHistory.InteractionEvent, _unwrapEvent);
+                                att['_id'] = _createAttachmentDocName(att);
+                                return cb(null, att);
+                            }
+                            else
+                                return cb('Unknown XML content');
                         }
-                    })
-                    parser = null;
+                    });
                 },
                 function error(err) {
+                    console.err('Error loading XML file '+err);
                     return cb(err, null);
+                });
+}
+
+EBZ.prototype.storeSingleAttachment = function storeSingleAttachment(attRaw, cb) {
+    var attachmentsDB = this.attachmentsDB;
+    var origAtt = attRaw;
+    try {
+        _unzip(attRaw, function(err, att) {
+            if (err) {
+                console.log('Continuing after hidding error in attachment %s of bug %s: ' + err, origAtt.id, origAtt.bug_id);
+                return cb(null, [0.00]);
+            }
+            else {
+                attachmentsDB.insert(att, function(err, result) {
+                if (err) {
+                    if (err.statusCode != 409) {
+                        console.log('Continuing after Error inserting attachment %s of bug %s into db: '+err, att.id, att.bug_id);
+                    }
+                    return cb(null, [0.01]);
+                } else
+                    return cb(null, [1.00]);
                 });
             }
         });
-    });
-    cb(null, att);
+    }
+    catch (err) {
+        console.log('Continuing after catching undeclared error and hidding it when processing attachment %s of bug %s: ' + err, origAtt.id, origAtt.bug_id);
+        return cb(null, [0.00]);
+    }
+   
+    // _catchToNull(attachment, function(err, attParsed) {
+    //     // err should not happen, thus
+    //     if (err)
+    //         return cb(null, 0);
+    //     if (attParsed) {
+    //         attachmentsDB.insert(attParsed, function(err, result) {
+    //             if (err) {
+    //                 console.log('Continuing after Error inserting attachment %s of bug %s into db: '+err, attParsed.id, attParsed.bug_id);
+    //                 return cb(null, 0);
+    //             } else
+    //                 return cb(null, 1);
+    //         });
+    //     }
+    //     else {
+    //         return cb(null, 0);
+    //     }
+    // });
 }
 
 EBZ.prototype.storeBulkAttachments = function storeBulkAttachments(attachments, cb) {
@@ -221,8 +309,10 @@ EBZ.prototype.storeBulkAttachments = function storeBulkAttachments(attachments, 
     if (bulk.docs.length > 0)
     {
         self.attachmentsDB.bulk(bulk, function(err, ok) {
-            if (err)
+            if (err) {
+                console.log('Error storing bulk documents: '+err);
                 return cb(err);
+            }
             else
                 return cb(null, bulk.docs.length);
         });
@@ -235,32 +325,37 @@ EBZ.prototype.storeXMLatt2JSONdoc = function storeXMLatt2JSONdoc(doc, cb) {
    // var attachmentsToStore = [];
     var self = this;
     if (doc && doc.attachments) {
-        // first filter out incomplete and keep appl/octet i.e. mylyn docs
-        var xmlAtts = _.chain(doc.attachments)
-            .filter(function(att) {
-                return (att.id && att.file_name && att.data && att.content_type);
-            })
-            .filter( function(att) {
-                return (att.content_type == "application/octet-stream"); 
-            })
-            .value();
-        
-        async.map(xmlAtts, _unzipAndParse, function(err, results) {
-            if (err)
-                return cb(err, null);
-            else {
-                console.log('%s Processed '+results.length+' out of '+doc.attachments.length+' attachements', doc._id);
-                // bulk store
-                self.storeBulkAttachments(_.filter(results, function(attachment) {
-                    if (!attachment) return false; else return true;
-                }), cb);
-                //return cb(null, results);
-            }
+        var xmlAtts = _filterValidAttachments(doc);
+        console.log('%s Processing '+xmlAtts.length+' out of '+doc.attachments.length+' attachments', doc._id);
+        async.concatSeries(xmlAtts, self.storeSingleAttachment.bind(self), function(err, count) {
+                if (err) { // all errors should by caught by store single 
+                    console.log('Error iterating through attachments: '+err);
+                    return cb(err, [0]);
+                }
+                else {
+                    var succ = _.reduce(count, function(sum, n) { return sum+n; }, 0);
+                    console.log('Inserted %d attachments for bug %s', succ, doc.id);
+                    return cb(null, [succ]);
+                }    
         });
+        
+        
+        // async.map(xmlAtts, _catchToNull, function(err, results) {
+        //     if (err) // all errors should by caught by catchToNull
+        //         return cb(err, null);
+        //     else {
+        //         console.log('%s Processed '+results.length+' out of '+doc.attachments.length+' attachments', doc._id);
+        //         // bulk store
+        //         self.storeBulkAttachments(_.filter(results, function(attachment) {
+        //             if (!attachment) return false; else return true;
+        //         }), cb);
+        //         //return cb(null, results);
+        //     }
+        // });
     }
     else {
         console.log('No attachments, ignoring bug: '+doc.id);
-        return cb(null, []);
+        return cb(null, 0);
     }
     //                     case "text/plain" :
     //                         const buffer = Buffer.from(att.data, 'base64');
@@ -271,7 +366,168 @@ EBZ.prototype.storeXMLatt2JSONdoc = function storeXMLatt2JSONdoc(doc, cb) {
     //                         // streamIn.push(null);
 }
 
+EBZ.prototype.checkExtractedAttachments = function checkExtractedAttachments(cb) {
+    //  check if all the attachments found in the bugs are also found in the couchdb
+    // generate all attachment names: then iterate though attachment db and check retrieve names
+    var self = this;
+    DBU.iterateAllDocuments(self.db, _iterateeExpectedAttachmentNames, self, 0, null, function(err, expected) {
+        if (err) {
+            console.log("Error iterating through bugs for expected attachment check: "+err);
+            return cb(err);
+        }
+        if (expected)
+        {
+           console.log('There are %d expected attachment docs', expected.length);
+           DBU.iterateAllDocuments(self.attachmentsDB, _iterateeActualAttachmentName, self, 0, null, function(err, attNames) {
+                if (err) {
+                    console.log("Error iterating through attachments for expected attachment check: "+err);
+                    return cb(err);
+                }
+                if (attNames) {
+                    console.log('There are %d actual attachment docs', attNames.length);
+                    var overlap = _.intersection(expected, attNames);
+                    var nonExisting = _.difference(expected, overlap);
+                    if (nonExisting.length > 0)
+                        console.log('NonExisting but Expected Attachements:'+nonExisting);  
+                    
+                    var notExpected = _.difference(attNames, overlap);
+                    if (notExpected.length > 0)
+                        console.log('Not Expected but Existing Attachments: '+notExpected);
+                    
+                    return cb(null, 'ok');
+                }
+           });
+        }
+    });
+}
 
+function _iterateeActualAttachmentName(row, cb) {
+    return cb(null, [row.doc._id]);
+}
+
+function _iterateeExpectedAttachmentNames(row, cb) {
+    var doc = row.doc;
+    var names = [];
+    _.forEach(_filterValidAttachments(doc), function(value) {
+        names.push(_createAttachmentDocName(value));
+    });
+    return cb(null, names);
+}
+
+function _filterValidAttachments(doc) {
+    var filtered = [];
+    if (doc && doc.attachments) {
+        filtered = _.chain(doc.attachments)
+            .filter(function(att) {
+                return (att.id && att.file_name && att.data && att.content_type);
+            })
+            .filter( function(att) {
+                return (att.content_type == "application/octet-stream"); 
+            })
+            .filter( function(att) {
+                return (att.summary == 'mylyn/context/zip' || 
+                        att.summary == 'mylar/context/zip' ||
+                        att.summary == 'activity_data' || 
+                        att.summary == 'activity data'
+                        );        
+            })
+            .value();
+    }        
+    return filtered;
+}
+
+EBZ.prototype.removeBugsWithoutMylynContext = function removeBugsWithoutMylynContext(cb) {
+    // check if at least one of the attachments found in a bug is a mylyn context, if not, then remove the bug
+    var self = this;
+    DBU.iterateAllDocuments(self.db, _iterateeNoAttachments, self, 0, null, function(err, results) {
+        if (err) {
+            console.log("Error iterating through documents for attachment analysis: "+err);
+            return cb(err);
+        }
+        if (results)
+        {
+            console.log('There are %d items to be processed', results.length);
+           async.concatSeries(results, 
+                            _deleteDocument.bind(self),
+                            function(err, results) {
+                                if (err) {
+                                    console.log('Error Deleting %d docs',results.length);
+                                    return cb(err);
+                                } else {
+                                    console.log('Successfully Deleted %d docs',results.length);
+                                    return cb(null, 'ok');
+                                }
+                            });
+        }
+    });
+}
+
+function _deleteDocument(doc, cb) {
+    var db = this.db;
+    if (!doc || !doc._id || !doc._rev)
+        return cb("Insufficient details for removing document "+doc);
+    db.destroy(doc._id, doc._rev, function(err, result) {
+        if (err) {
+            console.log('Failed to delete doc: '+doc._id);
+            return cb(err);
+        } else {
+            console.log('Deleted doc: '+doc._id);
+            return cb(null, [result]);
+        }
+    });
+                        
+}
+
+function _iterateeNoAttachments(row, cb) {
+    //var ctx = this;  //needs to be bound by caller
+    var doc = row.doc;
+    var count = _filterValidAttachments(doc).length;
+    if (count <= 0) { // no suitable attachments
+        console.log("Bug %s without mylyn attachments", doc.id);
+        return cb(null, [doc]);
+    }
+    else {
+       // console.log ("Bug %s with %d attachments", doc.id, count);
+        return cb(null, []);
+    }
+}
+
+EBZ.prototype.removeIllnamedAttachments = function removeIllnamedAttachments(cb) {
+    // check each Attachment whether it has a correctly formated name, otherwise remove it from the db
+    var self = this;
+    DBU.iterateAllDocuments(self.attachmentsDB, _iterateeIllNamed, self, 0, null, function(err, results) {
+        if (err) {
+            console.log("Error iterating through attachment documents for illformed attachment name: "+err);
+            return cb(err);
+        }
+        if (results)
+        {
+            console.log('There are %d items to be processed', results.length);
+            async.concatSeries(results, 
+                            _deleteDocument.bind({db: self.attachmentsDB}),
+                            function(err, results) {
+                                if (err) {
+                                    console.log('Error Deleting %d docs',results.length);
+                                    return cb(err);
+                                } else {
+                                    console.log('Successfully Deleted %d docs',results.length);
+                                    return cb(null, 'ok');
+                                }
+                            });
+        }    
+    });
+    return;
+}
+
+function _iterateeIllNamed(row, cb) {
+    var doc = row.doc;
+    if (!doc._id.startsWith(attachmentPrefix))
+    {
+        return cb(null, [doc]);
+    }
+    else
+        return cb(null, []);
+}
 
 EBZ.prototype.extractBugIds = function extractBugsFromFile(filename, cb) {
  
