@@ -131,7 +131,7 @@ app.get("/extractAttachments", function(req, res) {
 
 app.get("/processAttachments", function(req, res) {
     //myl.loadAttachment(req.query.attachmentId, function (err, result) {
-    myl.loadAllAttachments(function (err, result) {
+    myl.allAttachmentStats2CSV(function (err, result) {
         if (err) {
             return res.status(500).json({
                         'errors': err

@@ -1,0 +1,79 @@
+Bugs to delete because no mylyn attachments:
+
+Bug 153147
+Bug 160389
+Bug 183593 without mylyn attachments
+Bug 185836 without mylyn attachments
+Bug 187154 without mylyn attachments
+Bug 187880 without mylyn attachments
+Bug 211654 without mylyn attachments
+Bug 234210 without mylyn attachments
+Bug 253052 without mylyn attachments
+Bug 253053 without mylyn attachments
+Bug 253116 without mylyn attachments
+Bug 253117 without mylyn attachments
+Bug 253118 without mylyn attachments
+Bug 253119 without mylyn attachments
+Bug 253120 without mylyn attachments
+Bug 253121 without mylyn attachments
+Bug 253122 without mylyn attachments
+Bug 254822 without mylyn attachments
+Bug 254866 without mylyn attachments
+Bug 254867 without mylyn attachments
+Bug 254868 without mylyn attachments
+Bug 254949 without mylyn attachments
+Bug 269335 without mylyn attachments
+Bug 306790 without mylyn attachments
+Bug 318019 without mylyn attachments
+Bug 328090 without mylyn attachments
+Bug 330155 without mylyn attachments
+Bug 378069 without mylyn attachments
+Bug 432201 without mylyn attachments
+Bug 493628 without mylyn attachments
+
+Deleted doc: EBZId-153147
+Deleted doc: EBZId-160389
+Deleted doc: EBZId-183593
+Deleted doc: EBZId-185836
+Deleted doc: EBZId-187154
+Deleted doc: EBZId-187880
+Deleted doc: EBZId-211654
+Deleted doc: EBZId-234210
+Deleted doc: EBZId-253052
+Deleted doc: EBZId-253053
+Deleted doc: EBZId-253116
+Deleted doc: EBZId-253117
+Deleted doc: EBZId-253118
+Deleted doc: EBZId-253119
+Deleted doc: EBZId-253120
+Deleted doc: EBZId-253121
+Deleted doc: EBZId-253122
+Deleted doc: EBZId-253123
+Deleted doc: EBZId-253124
+Deleted doc: EBZId-253125
+Deleted doc: EBZId-253126
+Deleted doc: EBZId-253128
+Deleted doc: EBZId-253129
+Deleted doc: EBZId-253130
+Deleted doc: EBZId-254822
+Deleted doc: EBZId-254866
+Deleted doc: EBZId-254867
+Deleted doc: EBZId-254868
+Deleted doc: EBZId-254949
+Deleted doc: EBZId-269335
+Deleted doc: EBZId-306790
+Deleted doc: EBZId-318019
+Deleted doc: EBZId-328090
+Deleted doc: EBZId-330155
+Deleted doc: EBZId-378069
+Deleted doc: EBZId-432201
+Deleted doc: EBZId-493628
+
+TO Restore:
+153147 ok
+185836 ok 
+187880 ok
+183593 ok
+187154 ok
+160389 ok 
+

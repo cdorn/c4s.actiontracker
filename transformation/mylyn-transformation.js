@@ -1,5 +1,7 @@
 
 var _ = require('lodash');
+var fs = require('fs');
+var csvWriter = require('csv-write-stream');
 var DBU = require('../util/dbutil.js');
 
 module.exports = initAtt2Mylyn;
@@ -149,27 +151,36 @@ function _unwrapRow(row) {
 A2M.prototype.loadAttachment = function loadAttachment(id, cb) {
     this.db.get(id, function(err, body) {
         if (!err) {
-           console.log(getKindStats(body.jsondata));
-           var events = filterEvents(body.jsondata);
-           console.log('Filtered '+body.jsondata.length+" events down to "+events.length);
-        //   _.forEach(events, function(value) {
-        //       console.log(value.structure);
-        //   });
-            var stats = getResourceStats(events)
-            stats.readCount = _.chain(stats.read)
-                                .mapValues( function(value, key) {
-                                    return value.length;
-                                })
-                                .value();
-            stats.writeCount = _.chain(stats.write)
-                                .mapValues( function(value, key) {
-                                    return value.length;
-                                })
-                                .value();
-            stats.onlyReads = _.difference(_.keys(stats.read),_.keys(stats.write));                    
-            console.log(stats);
+        //   console.log(getKindStats(body.jsondata));
+        //   var events = filterEvents(body.jsondata);
+        //   console.log('Filtered '+body.jsondata.length+" events down to "+events.length);
+        // //   _.forEach(events, function(value) {
+        // //       console.log(value.structure);
+        // //   });
+        //     var stats = getResourceStats(events);
+        //     // Read and Write per FILE!!! not overall
+        //     stats.readCount = _.chain(stats.read)
+        //                         .mapValues( function(value, key) {
+        //                             return value.length;
+        //                         })
+        //                         .value();
+        //     stats.writeCount = _.chain(stats.write)
+        //                         .mapValues( function(value, key) {
+        //                             return value.length;
+        //                         })
+        //                         .value();
+        //     stats.onlyReads = _.difference(_.keys(stats.read),_.keys(stats.write));                    
+        //     console.log(stats);
 
-            return cb(null, events);
+        //     return cb(null, events);
+        
+        
+            var writer = csvWriter({ headers: csvAttKeys.concat(csvEventKeys)});
+            writer.pipe(fs.createWriteStream('stats1.csv'));
+            writer.write(_compileCSVLine(body));
+            writer.end();
+           return cb(null, 'ok');
+        
         }
         else return cb(err);
     });
@@ -181,33 +192,63 @@ function getKindStats(events) {
             result[event.Kind] = 0;
         result[event.Kind]++;    
         return result;
-    }, {});
+    }, { 
+        propagation : 0, 
+        manipulation : 0,
+        edit : 0,
+        selection : 0,
+        prediction : 0,
+        command : 0
+    });
 }
 
-function getResourceStats(events) {
+const csvEventKeys = ['uniqueArtifactReads', 'uniqueArtifactWrites','readOnlyArtifactCount','uniqueJavaArtifacts','uniqueResourceArtifacts', 
+                'edit','selection','command','manipulation','prediction','propagation'];
+
+
+const csvAttKeys = ['id', 'user', 'bug', 'timestamp'];
+
+function getEventStats(events) {
     // store for each artifact the number of occurences for selected and manipulation
     var stats = {
         read : {},
         write : {},
-        java : 0,
-        resource : 0
+        java : {},
+        resource : {},
+        propagation : 0, 
+        manipulation : 0,
+        edit : 0,
+        selection : 0,
+        prediction : 0,
+        command: 0
     };
-    return _.reduce(events, function(result, event){
+    stats = _.reduce(events, function(result, event){
         if (event.Kind == 'selection') {
             (result.read[event.StructureHandle] || (result.read[event.StructureHandle] = [])).push(event);     
-        } else if (event.Kind == 'manipulation') {
+        } else if (event.Kind == 'edit') {
             (result.write[event.StructureHandle] || (result.write[event.StructureHandle] = [])).push(event);
         }
         if (event.StructureKind == 'java') {
-            result.java++;
+             (result.java[event.StructureHandle] || (result.java[event.StructureHandle] = [])).push(event);
         } else if (event.StructureKind == 'resource') {
-            result.resource++;
+             (result.resource[event.StructureHandle] || (result.resource[event.StructureHandle] = [])).push(event);
         }
+        if (!result[event.Kind])
+            result[event.Kind] = 0;
+        result[event.Kind]++; 
         return result;
     }, stats);
+    stats.readOnlyArtifacts = _.difference(_.keys(stats.read),_.keys(stats.write));
+    
+    stats.uniqueArtifactReads = _.keys(stats.read).length;
+    stats.uniqueArtifactWrites = _.keys(stats.write).length;
+    stats.readOnlyArtifactCount = stats.readOnlyArtifacts.length; 
+    stats.uniqueJavaArtifacts = _.keys(stats.java).length;
+    stats.uniqueResourceArtifacts = _.keys(stats.resource).length;
+    
+    return stats;
 }
 
-// function
 
 //         statistics for:
 // sessions per user
@@ -223,3 +264,53 @@ function getResourceStats(events) {
 // # of A.edited and B.viewed
 // overlap of A.edited and B.edited
 
+A2M.prototype.allAttachmentStats2CSV = function allAttachmentStats2CSV(cb) {
+    DBU.iterateAllDocuments(this.db, _iterateeCSVLine, this, 0, null, function(err, results){
+        if (err) {
+            console.log("Error iterating through attachments for stats collection: "+err);
+            return cb(err);
+        }
+        if (results)
+        {
+           console.log('There are %d items to be processed', results.length);
+           var writer = csvWriter({ headers: csvAttKeys.concat(csvEventKeys)});
+           writer.pipe(fs.createWriteStream('stats.csv'));
+           _.forEach(results, function(csvLine) {
+               writer.write(csvLine);
+           });
+           writer.end();
+           return cb(null, 'ok');
+        }
+    });
+}
+
+
+function _iterateeCSVLine(row, cb) {
+    return cb(null, [_compileCSVLine(row.doc)]);
+}
+
+function _compileCSVLine(att)
+{
+    var stats = getEventStats(att.jsondata);
+    var attStats = [att.id,
+                    att.attacher, 
+                    att.bug_id,
+                    att.creation_time,
+                  ];
+    var eventStats = [];
+    _.forEach(csvEventKeys, function(value) {
+        eventStats.push(stats[value]);
+    });
+    return (attStats.concat(eventStats));
+}
+
+
+// function _calcUserStats(stats, attachment) {
+//     stats.userSessionCount[attachment.attacher] ? stats.userSessionCount[attachment.attacher]++ : stats.userSessionCount[attachment.attacher] = 1;
+    
+//     //stats.userBugs[attachment.attacher] ? stats.userSession[attachment.attacher] = stats.userBugs[attachment.attacher]. : stats.userSession[attachment.attacher] = 1;
+// }
+
+// function _collectUserData(data, attachment) {
+//     (data.userBugs[attachment.attacher] || (data.userBugs[attachment.attacher] = [])).push(attachment.bug_id);
+// }
