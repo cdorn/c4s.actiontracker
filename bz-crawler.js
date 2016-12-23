@@ -6,8 +6,9 @@ var errorHandler = require('errorhandler');
 var http = require('http');
 var async = require('async');
 var c = require('./config.js');
-var initEBZ = require('./extractors/crawlEclipseBugzilla.js');
-var initAtt2Mylyn = require('./transformation/mylyn-transformation.js');
+var CBZ = require('./extractors/crawlEclipseBugzilla.js');
+var MT = require('./transformation/mylyn-transformation.js');
+var initBT = require("./transformation/bugzilla-transformation");
 var DBU = require('./util/dbutil.js');
 
 var app = express();
@@ -28,6 +29,12 @@ var bugdbConfig = {
     dbURL: c.config.couchDB_url,
 };
 
+var flatbugdbConfig = {
+    dbName: c.config.flatbug_dbName,
+    cleanUp: 'false',
+    dbURL: c.config.couchDB_url,
+}
+
 var attachmentdbConfig = {
     dbName: c.config.bugAttachments_dbName,
     cleanUp: 'false',
@@ -36,11 +43,14 @@ var attachmentdbConfig = {
 
 //var dbUtil = new DBU.DBUtil();
 
-var ebz = undefined;
-var myl = undefined;
+var ebz = null;
+var myl = null;
+var bt = null;
+var mea = null;
 async.parallel([
         async.apply(DBU.initCouchDB, bugdbConfig),
-        async.apply(DBU.initCouchDB, attachmentdbConfig)
+        async.apply(DBU.initCouchDB, attachmentdbConfig),
+        async.apply(DBU.initCouchDB, flatbugdbConfig)
     ],
     // now do something with the results
     function(err, results) {
@@ -50,7 +60,9 @@ async.parallel([
             var mylynAttConfig = {
                 attachmentsDB : results[1]
             };
-            myl = initAtt2Mylyn(mylynAttConfig);
+            myl = MT.initAtt2Mylyn(mylynAttConfig);
+            
+            mea = MT.initMylynEventAnalysis({flatBugDB : results[2]});
             
             var bzconfig = {
                 bugDB: results[0],
@@ -60,7 +72,14 @@ async.parallel([
                 bugzillaPassword: c.config.bugzillaPassword
             };
             
-            initEBZ(bzconfig, function(err, inst) {
+            var btConfig = {
+                fullBugDB : results[0],
+                flatBugDB : results[2],
+                attachmentsDB : results[1]
+            }
+            bt = initBT(btConfig);
+            
+            CBZ.initEBZ(bzconfig, function(err, inst) {
                 if (!err) {
                     ebz = inst;
                     console.log("Eclipse Bugzilla Extractor Ready");
@@ -117,7 +136,10 @@ app.get("/extractAttachments", function(req, res) {
     //ebz.convertAllBlobs2Attachments(function (err, result) {
     //ebz.removeBugsWithoutMylynContext(function (err, result){
     // ebz.removeIllnamedAttachments(function (err, result) {
-     ebz.checkExtractedAttachments( function (err, result) {
+    // ebz.checkExtractedAttachments( function (err, result) {
+    //ebz.generateBugPairs( function (err, result) {
+   //bt.transformFullBugs2ActRefBugs(function (err, result) {
+     bt.transformActivityRefBugs2FlatBugs(function (err, result) {
         if (err) {
             return res.status(500).json({
                         'errors': err
@@ -131,7 +153,9 @@ app.get("/extractAttachments", function(req, res) {
 
 app.get("/processAttachments", function(req, res) {
     //myl.loadAttachment(req.query.attachmentId, function (err, result) {
-    myl.allAttachmentStats2CSV(function (err, result) {
+    //myl.allAttachmentStats2CSV(function (err, result) {
+    // mea.analyseBugDependencies(function (err, result) {
+      mea.analyseAllBugDependencies(function (err, result) {
         if (err) {
             return res.status(500).json({
                         'errors': err

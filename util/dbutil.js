@@ -1,7 +1,7 @@
 var async = require('async');
 var neo4j = require('neo4j-driver').v1;
 
-module.exports = {initCouchDB,initNeo4jDB,iterateAllDocuments};
+module.exports = {initCouchDB,initNeo4jDB,iterateAllDocuments,iterateAllDocumentsOneByOne};
 
 // function DBUtil() {
 //     var self = this;
@@ -116,3 +116,40 @@ function iterateAllDocuments(db, iteratee, ctx, offset, results, cb) {
                 });
         });
     }
+    
+function iterateAllDocumentsOneByOne(db, iteratee, ctx, offset, results, cb) {
+    results = results || [];
+    db.list({
+            include_docs: true,
+            limit: 1,
+            skip: offset
+        },
+        function(err, data) {
+            var total, offset, rows;
+            if (err) {
+                rows = [];
+                console.error('Error iterating through documents '+err);
+                return cb(err, results);
+            }
+            total = data.total_rows;
+            offset = data.offset;
+            rows = data.rows;
+            if (offset === total) {
+                console.log('Completed iterating through all %d documents', total);
+                return cb(null, results);
+            }
+            
+            //need to unwarp row to access doc: row.doc
+            async.concatSeries(rows, 
+                        iteratee.bind(ctx), 
+                        function(err, result) {
+                if (!err)
+                {
+                    iterateAllDocuments(db, iteratee, ctx, offset + 1, results.concat(result), cb);    
+                }
+                else {
+                    return cb(err, results);
+                }
+                });
+        });
+    }    

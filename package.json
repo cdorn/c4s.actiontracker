@@ -11,6 +11,8 @@
   "dependencies": {
     "async": "^2.1.4",
     "body-parser": "^1.15.2",
+    "csv-write-stream": "^2.0.0",
+    "date-and-time": "^0.4.0",
     "errorhandler": "^1.4.3",
     "express": "^4.14.0",
     "jszip": "^3.1.3",

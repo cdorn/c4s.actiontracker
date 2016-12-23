@@ -2,6 +2,7 @@
 var bz = require("./bz-json-ext.js");
 var JSZip = require("jszip");
 var X2J = require('xml2js');
+var fs = require('fs');
 //var Readable = require('stream').Readable;
 var _ = require('lodash');
 var async = require('async');
@@ -9,7 +10,7 @@ var DBU = require('../util/dbutil.js');
 
 const attachmentPrefix = 'ActivityAttachment-';
 
-module.exports = initEBZ;
+module.exports = {initEBZ,readBugsAndTuplesFile, createDBIDfromBugID};
 
 function initEBZ(opts, cb) {
     if (!opts || !opts.bugDB || !opts.attachmentsDB)
@@ -21,7 +22,7 @@ function EBZ(opts, cb) {
     this.db = opts.bugDB;
     this.attachmentsDB = opts.attachmentsDB;
     
-    this.createDBIDfromBugID = function(bugId) { return "EBZId-"+bugId; }
+    
     var bzUrl = opts.bugzillaUrl || "https://bugzilla.mozilla.org/jsonrpc.cgi";
     var bzUser = opts.bugzillaUser;
     var bzPassword = opts.bugzillaPassword;
@@ -580,3 +581,103 @@ EBZ.prototype.mergeBugs = function mergeBugs(cb) {
     });
     
 }
+
+EBZ.prototype.generateBugPairs = function generateBugPairs(cb) {
+    var self = this;
+    DBU.iterateAllDocuments(self.db, _iterateeBugDependencies, self, 0, null, function(err, results) {
+        if (err) {
+            console.log("Error iterating through bug documents for bug dependencies: "+err);
+            return cb(err);
+        }
+        if (results)
+        {
+            console.log('There are %d items to be processed', results.length);
+            // need to unwrap structures from result to obtain list of 
+            //produce list of tuples <blocking, blocked>
+            //produce list of all bugs with attachment
+            // filter tuple list where both bugs are in buglist
+            // store filtered list as json document
+            var bugCount = 0;
+            var bugs = { };
+            var tuples = _.chain(results)
+                .forEach(function(structure){
+                    bugCount++;
+                    bugs[structure.bug_id] = 0; // store all bugs with attachment (id only)
+                })
+                .flatMapDeep(function(structure) { // concat all tuples from structure into one single array
+                    return structure.dependencies;
+                }) 
+                .filter(function(tuple) { // filter out those where either bug is without mylyn attachment
+                    return (bugs[tuple.from] !== undefined && bugs[tuple.to] !== undefined);
+                })
+                .filter(function(tuple) { // reduce bidirection links == inverse tuples to single
+                    return tuple.from > tuple.to; // we don't care about direction, filters also accidental self references
+                })
+                .value();
+            console.log('There are %d unique bugs, and %d full tuples', bugCount, tuples.length);    
+            
+            var bugStats = _.chain(tuples)
+                .reduce(function(bugs, tuple) {
+                  bugs[tuple.from]++;
+                  bugs[tuple.to]++;
+                  return bugs;
+                }, bugs) // having bugs as output, next map to array for sorting
+                .reduce(function(result, value, key) {
+                    result.push({id: key, count:value}); 
+                    return result;
+                }, []) // now having array
+                // .mapValue(function(value){ // should not be necessary
+                //     return (value/2);
+                // })
+                .orderBy(['count','id'],['desc', 'asc']) // now sort it by count and bugid
+                .value();
+            
+            var bugWdepCount = _.reduce(bugStats, function(result, value) {
+                if (value.count >0) 
+                    result++;
+                return result;
+            }, 0);    
+            console.log('Bugs w Depdencies: '+bugWdepCount);
+                
+            fs.writeFile ("bugsAndTuples.json", JSON.stringify({ 'bugstats':bugStats, 'tuples':tuples}), function(err) {
+                if (err) {
+                    console.log(err);
+                    return cb(err);
+                }
+                else {
+                    console.log('complete writing file');
+                    return cb(null, 'ok');
+                }
+            });
+        }    
+    });
+}
+
+function createDBIDfromBugID(bugId) { return "EBZId-"+bugId; }
+
+function readBugsAndTuplesFile(cb) {
+    fs.readFile('./data/bugsAndTuplesAll.json', function(err, result) {
+        if (err) {
+            console.log('Error reading file: '+err);
+            return cb(err);
+        }
+        return cb(null, JSON.parse(result));
+    })
+}
+
+function _iterateeBugDependencies(row, cb) {
+    var  doc = row.doc;
+    var structure = { bug_id: doc.id,
+                      dependencies: []
+    };
+    _.forEach(doc.blocks, function(value) {
+        structure.dependencies.push({'from' : doc.id,
+                                    'to' : value});
+    });
+    _.forEach(doc.depends_on, function(value) {
+        structure.dependencies.push({'to' : value,
+                                    'from' : doc.id});
+    })
+    return cb(null, [structure]);
+}
+
